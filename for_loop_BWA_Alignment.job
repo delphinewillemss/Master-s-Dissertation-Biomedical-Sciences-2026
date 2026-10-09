@@ -1,0 +1,56 @@
+#DOEL CODE: zelfde doel als 'Parallel_BWA_Alignment.job' maar deze code gebruikt een loop waardoor elke sample één voor één wordt verwerkt (trager indien veel samples maar simpelere code).
+#!/bin/bash
+#SBATCH --job-name=fq_to_bam          # create a short name for your job
+#SBATCH --nodes=1                      # node count
+#SBATCH --cpus-per-task=8             # request a full node for local execution (broadwell nodes have 28 cpus)
+#SBATCH --mem=16G                     # total memory (e.g., 112G max for broadwell) - can be omitted to use default (= max / # cores)
+#SBATCH --time=2:00:00                # total run time limit (HH:MM:SS)
+#SBATCH --mail-user=delphine.willems@ugent.be
+#SBATCH --mail-type=all
+
+cd $SLURM_SUBMIT_DIR
+
+module load BWA/0.7.18-GCCcore-13.3.0
+
+ref="/kyukon/scratch/gent/vo/002/gvo00207/vsc52059/mm10_ref/mm10.fa.gz"
+bwa index "$ref"
+
+module load SAMtools/1.21-GCC-13.3.0
+
+dir="/scratch/gent/vo/002/gvo00207/vsc52059/test_data_GATA2_GATA3_mouse"
+mapfile -t subdirs < <(find "$dir" -maxdepth 1 -type d)
+
+for subdirectory in "${subdirs[@]}"; do
+    
+    fq1=($(find $subdirectory -maxdepth 1 -type f -name "*_R1*"))
+    fq2=($(find $subdirectory -maxdepth 1 -type f -name "*_R2*"))
+    
+    base_name=$(basename "$fq1" _R1_001.fastq.gz)
+    output_dir="${subdirectory}/output"
+    
+    mkdir -p "$output_dir"
+    
+
+    bwa mem \
+        mm10_ref/mm10.fa.gz \
+        "$fq1" \
+        "$fq2" \
+        > "$output_dir"/${base_name}.sam
+
+    samtools view -bS "$output_dir"/${base_name}.sam \
+        > "${output_dir}"/${base_name}.bam
+
+    samtools sort  "${output_dir}"/${base_name}.bam \
+        -o  "${output_dir}"/${base_name}_sorted.bam
+
+    samtools index "${output_dir}"/${base_name}_sorted.bam
+    
+    rm "${output_dir}"/${base_name}.bam
+    rm "${output_dir}"/${base_name}.sam
+    
+    samtools flagstat \
+    "${output_dir}"/${base_name}_sorted.bam \
+    > "${output_dir}"/${base_name}_flagstat.txt
+    
+
+done

@@ -1,0 +1,108 @@
+#DOEL CODE: FASTQ (R1 + R2) → BWA alignment → BAM output (sorted) ; dit gebeurt automatisch en parallel
+#!/bin/bash
+#SBATCH --job-name=bwa_ResolveDNA
+#SBATCH --nodes=1
+#SBATCH --cpus-per-task=24
+#SBATCH --mem=32G
+#SBATCH --time=12:00:00
+#SBATCH --mail-user=delphine.willems@ugent.be
+#SBATCH --mail-type=ALL
+#SBATCH --output=/kyukon/scratch/gent/vo/002/gvo00207/vsc52059/error/%x_%A_%a.log
+#SBATCH --array=0-30%5
+
+# Always make sure the script starts in the directory from which it was submitted
+cd "$SLURM_SUBMIT_DIR"
+
+# === Define variables ===
+
+dir="/data/gent/vo/002/gvo00207/shared/ResolveDNA_Universal_Library_Preparation_20260709_070503"
+
+# Get all matching subdirectories with the given pattern
+mapfile -t subdirs < <(
+  find "$dir" -maxdepth 1 -type d -name "GGS*" | sort
+)
+
+# Safety check: make sure SLURM_ARRAY_TASK_ID is within bounds
+if [ "$SLURM_ARRAY_TASK_ID" -ge "${#subdirs[@]}" ]; then
+    echo "Task ID $SLURM_ARRAY_TASK_ID is out of range (max index: $((${#subdirs[@]} - 1)))"
+    exit 1
+fi
+
+# Get the current subdirectory
+sample_dir="${subdirs[$SLURM_ARRAY_TASK_ID]}"
+base_name=$(basename "$sample_dir")
+
+#fq1=$(find "$sample_dir" -type f -name "*R1*.fastq.gz")
+#fq2=$(find "$sample_dir" -type f -name "*R2*.fastq.gz")
+
+fq1_l1=$(find "$sample_dir" -type f -name "*L001_R1_001.fastq.gz")
+fq2_l1=$(find "$sample_dir" -type f -name "*L001_R2_001.fastq.gz")
+fq1_l2=$(find "$sample_dir" -type f -name "*L002_R1_001.fastq.gz")
+fq2_l2=$(find "$sample_dir" -type f -name "*L002_R2_001.fastq.gz")
+
+# Reference genome
+ref="/kyukon/scratch/gent/vo/002/gvo00207/vsc52059/mm10_ref/mm10.fa.gz"
+
+# Output directory
+out="/kyukon/scratch/gent/vo/002/gvo00207/vsc52059/ResolveDNA_results/$base_name"
+mkdir -p "$out"
+
+# === Load modules ===
+module purge
+module load BWA/0.7.18-GCCcore-13.3.0
+module load SAMtools/1.21-GCC-13.3.0
+
+# === Conversion ===
+
+# Alignment L1
+bwa mem -t $SLURM_CPUS_PER_TASK \
+"$ref" \
+"$fq1_l1" \
+"$fq2_l1" \
+| samtools view -@ $SLURM_CPUS_PER_TASK -bS - \
+> "$out/${base_name}_L001.bam"
+echo "Alignment lane 1 done for $base_name"
+ 
+#Alignment L2 
+bwa mem -t $SLURM_CPUS_PER_TASK \
+"$ref" \
+"$fq1_l2" \
+"$fq2_l2" \
+| samtools view -@ $SLURM_CPUS_PER_TASK -bS - \
+> "$out/${base_name}_L002.bam"
+echo "Alignment lane 2 done for $base_name"
+
+#samtools merge 
+samtools merge -@ $SLURM_CPUS_PER_TASK \
+"$out/${base_name}_merged.bam" \
+"$out/${base_name}_L001.bam" \
+"$out/${base_name}_L002.bam"
+echo "Merge completed for $base_name"
+
+# Sort BAM
+samtools sort -@ $SLURM_CPUS_PER_TASK \
+-o "$out/${base_name}_sorted.bam" \
+"$out/${base_name}_merged.bam"
+echo "Sorting completed for $base_name"
+
+# Index BAM
+samtools index \
+"$out/${base_name}_sorted.bam"
+echo "Indexing completed for $base_name"
+
+# === QC ===
+samtools flagstat \
+"$out/${base_name}_sorted.bam" \
+> "$out/${base_name}_flagstat.txt"
+echo "Flagstat done for $base_name"
+ 
+# === Coverage ===
+samtools coverage \
+"$out/${base_name}_sorted.bam" \
+> "$out/${base_name}_coverage.txt"
+echo "Coverage calculation done for $base_name"
+ 
+# === Remove intermediate files ===
+rm "$out/${base_name}_L001.bam"
+rm "$out/${base_name}_L002.bam"
+rm "$out/${base_name}_merged.bam"

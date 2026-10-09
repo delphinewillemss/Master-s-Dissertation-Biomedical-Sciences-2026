@@ -1,0 +1,38 @@
+#!/bin/bash
+#SBATCH --job-name=QDNAseqCRAM
+#SBATCH --nodes=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=28G
+#SBATCH --time=24:00:00
+#SBATCH --array=0-43
+#SBATCH --output=logs/%x_%A_%a.out
+#SBATCH --error=logs/%x_%A_%a.err
+
+cd $SLURM_SUBMIT_DIR
+
+module purge
+module load R/4.6.1-gfbf-2026.1
+
+mkdir -p logs
+
+BAM_DIR="/scratch/gent/vo/002/gvo00207/vsc52059/CRAM"
+OUT_DIR="/scratch/gent/vo/002/gvo00207/vsc52059/CRAM/CNV_output"
+
+mkdir -p "$OUT_DIR"
+
+## submappen per sample (bv. GGS20260324_1/), daarin het *_sorted.bam
+bamfiles=($(find "$BAM_DIR" -mindepth 2 -maxdepth 2 -name "*_sorted.bam" | sort))
+
+bam=${bamfiles[$SLURM_ARRAY_TASK_ID]}
+
+if [ -z "$bam" ]; then
+    echo "FOUT: geen BAM-bestand gevonden op index ${SLURM_ARRAY_TASK_ID}." >&2
+    exit 1
+fi
+
+echo "Taak ${SLURM_ARRAY_TASK_ID}: verwerk ${bam}"
+
+Rscript mm10_qdnaseqCRAM.R \
+    "$bam" \
+    "$OUT_DIR" \
+    "1000"

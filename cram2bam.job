@@ -1,0 +1,74 @@
+#!/bin/bash
+#SBATCH --job-name=cram2bam
+#SBATCH --time=12:00:00
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=32G
+#SBATCH --mail-user=delphine.willems@ugent.be
+#SBATCH --mail-type=ALL
+#SBATCH --output=/scratch/gent/vo/002/gvo00207/vsc52059/CRAM/logs/%x_%A_%a.log
+#SBATCH --array=0-42%5
+
+# Start in submit directory
+cd "$SLURM_SUBMIT_DIR"
+
+# Input directory
+dir="/data/gent/vo/002/gvo00207/shared/PROB2603060"
+
+# Find ONLY .cram files (not .cram.crai)
+subdirs=($(find "$dir" -maxdepth 1 -type f -name "*.cram" | sort))
+
+# Safety check
+if [ "$SLURM_ARRAY_TASK_ID" -ge "${#subdirs[@]}" ]; then
+    echo "Task ID $SLURM_ARRAY_TASK_ID is out of range"
+    exit 1
+fi
+
+# Current file
+target_file="${subdirs[$SLURM_ARRAY_TASK_ID]}"
+base_name=$(basename "$target_file" .cram)
+
+# Reference genome
+ref="/data/gent/vo/002/gvo00207/shared/seq/mm10.fa"
+
+# Output directory
+out="/scratch/gent/vo/002/gvo00207/vsc52059/CRAM/$base_name"
+mkdir -p "$out"
+
+# Log directory
+mkdir -p /scratch/gent/vo/002/gvo00207/vsc52059/CRAM/logs
+
+# Modules
+ml purge
+ml SAMtools/1.21-GCC-13.3.0
+
+echo "Processing $target_file"
+
+# CRAM -> BAM
+samtools view \
+    -@ $SLURM_CPUS_PER_TASK \
+    -b \
+    -T "$ref" \
+    -o "$out/$base_name.bam" \
+    "$target_file"
+
+# Sort
+samtools sort \
+    -@ $SLURM_CPUS_PER_TASK \
+    -o "$out/${base_name}_sorted.bam" \
+    "$out/$base_name.bam"
+
+# Index
+samtools index "$out/${base_name}_sorted.bam"
+
+# Extract chrM
+samtools view \
+    -@ $SLURM_CPUS_PER_TASK \
+    -b \
+    "$out/${base_name}_sorted.bam" \
+    chrM \
+    > "$out/${base_name}_sorted_chrM.bam"
+
+# Remove intermediate BAM
+rm "$out/$base_name.bam"
+
+echo "Finished $base_name"

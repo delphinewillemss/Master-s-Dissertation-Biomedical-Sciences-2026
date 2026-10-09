@@ -1,0 +1,22 @@
+#DOEL CODE: gebruikt als input fastq files en voert hier BWA op uit (dit zal BAM files als output maken). Deze code verloopt parallel op meerdere files tegelijk (zie array). 
+#opmerking: dit is een simpele, niet automatische code, om een echte bwa alligment uit te voeren zie code van 'Parallel_BWA_Alignment.job'
+#!/bin/bash
+#SBATCH --job-name=parallel
+#SBATCH --array=0-9%3
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=16G
+#SBATCH --mail-user=delphine.willems@ugent.be
+#SBATCH --time=01:00:00
+
+module load BWA/0.7.18-GCCcore-13.3.0
+module load SAMtools/1.21-GCC-13.3.0
+
+dir="test_data_GATA2_GATA3_mouse"
+subdir=($(find $dir -type d -name "Pool*" | sort))
+sample=${subdir[$SLURM_ARRAY_TASK_ID]}
+
+fq1=$(find $sample -type f -name "*R1*")
+fq2=$(find $sample -type f -name "*R2*")
+
+bwa mem -t 16 mm10_ref/mm10.fa.gz $fq1 $fq2 | \
+samtools view -bS - > ${sample}.bam

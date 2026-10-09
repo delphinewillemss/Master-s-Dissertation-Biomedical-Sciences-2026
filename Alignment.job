@@ -1,0 +1,239 @@
+#DOEL CODE: dit is een volledige versie om van FASTQC --> filtered BAM + index + QC metrics te gaan. Gebruikt ook een loop waardoor sample per sample verwerkt wordt.
+#!/bin/bash
+#SBATCH --job-name=alignment
+#SBATCH --nodes=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=64G
+#SBATCH --time=12:00:00
+#SBATCH --mail-user=delphine.willems@ugent.be
+#SBATCH --mail-type=all
+#SBATCH --output=./error/%x_%A_%a.log
+
+cd "$SLURM_SUBMIT_DIR"
+
+# ============================================================
+# DIRECTORY CONTAINING SUBDIRECTORIES WITH FASTQ FILES
+
+# ============================================================
+
+dir="/scratch/gent/vo/002/gvo00207/vsc52059/test_data_GATA2_GATA3_mouse"
+
+if [[ -z "$dir" ]]; then
+    echo "ERROR: No input directory provided."
+    echo "Usage: sbatch alignment_mt.job /path/to/directory/"
+    exit 1
+fi
+
+if [[ ! -d "$dir" ]]; then
+    echo "ERROR: Directory does not exist: $dir"
+    exit 1
+fi
+
+
+# ============================================================
+# REFERENCE GENOME
+# ============================================================
+
+ref="/kyukon/scratch/gent/vo/002/gvo00207/vsc52059/mm10_ref/mm10.fa.gz"
+
+ref_dir=$(dirname "$ref")
+ref_file=$(basename "$ref")
+
+
+# ============================================================
+# LOAD MODULES
+# ============================================================
+
+ml purge
+ml BWA/0.7.18-GCCcore-13.3.0
+ml SAMtools/1.21-GCC-13.3.0
+
+
+# ============================================================
+# CHECK BWA REFERENCE INDEX
+# ============================================================
+
+if [[ -f "$ref_dir/$ref_file.bwt" &&
+      -f "$ref_dir/$ref_file.pac" &&
+      -f "$ref_dir/$ref_file.ann" &&
+      -f "$ref_dir/$ref_file.amb" &&
+      -f "$ref_dir/$ref_file.sa" ]]; then
+
+    echo "Reference is indexed for BWA."
+
+else
+
+    echo "Reference is NOT indexed."
+    echo "Indexing now with: bwa index $ref"
+
+    bwa index "$ref"
+
+    if [[ $? -ne 0 ]]; then
+        echo "ERROR: BWA indexing failed."
+        exit 1
+    fi
+
+fi
+
+
+# ============================================================
+# GET LIST OF SUBDIRECTORIES
+# ============================================================
+
+mapfile -t subdirs < <(
+    find "$dir" -mindepth 1 -maxdepth 1 -type d
+)
+
+echo "Found ${#subdirs[@]} subdirectories:"
+
+printf '  %s\n' "${subdirs[@]}"
+
+
+# ============================================================
+# PROCESS EACH DIRECTORY
+# ============================================================
+
+for target_dir in "${subdirs[@]}"; do
+
+    sample=$(basename "$target_dir")
+
+    echo "=========================================="
+    echo "Processing: $sample"
+    echo "Directory:  $target_dir"
+    echo "=========================================="
+
+
+    # ========================================================
+    # FASTQ FILES
+    # ========================================================
+
+fq1=$(find "$target_dir" -type f -name "*_R1_001.fastq.gz")
+fq2=$(find "$target_dir" -type f -name "*_R2_001.fastq.gz")
+
+if [[ -z "$fq1" ]]; then
+    echo "WARNING: R1 FASTQ not found in $target_dir"
+    continue
+fi
+
+if [[ -z "$fq2" ]]; then
+    echo "WARNING: R2 FASTQ not found in $target_dir"
+    continue
+fi
+
+
+    # ========================================================
+    # OUTPUT FILES
+    # ========================================================
+
+    mkdir -p "$target_dir/bams"
+    
+    base_name=$(basename "$fq1" _R1_001.fastq.gz)
+    
+    sam_file="$target_dir/${base_name}.sam"
+    
+    bam_file="$target_dir/bams/${base_name}_sorted.bam"
+
+    bam_filtered_file="$target_dir/bams/${base_name}_sorted_filtered.bam"
+
+    flagstat_org="$target_dir/bams/${base_name}_flagstat.txt"
+    idxstat_org="$target_dir/bams/${base_name}_idxstat.txt"
+    coverage_org="$target_dir/bams/${base_name}_coverage.txt"
+
+    flagstat_filt="$target_dir/bams/${base_name}_filtered_flagstat.txt"
+    idxstat_filt="$target_dir/bams/${base_name}}_filtered_idxstat.txt"
+    coverage_filt="$target_dir/bams/${base_name}_filtered_coverage.txt"
+
+
+    # ========================================================
+    # BWA ALIGNMENT
+    # ========================================================
+
+    echo "Running BWA alignment..."
+
+    bwa mem \
+        -t "$SLURM_CPUS_PER_TASK" \
+        "$ref" \
+        "$fq1" \
+        "$fq2" \
+        > "$sam_file"
+
+    if [[ $? -ne 0 ]]; then
+        echo "ERROR: BWA alignment failed for $sample"
+        continue
+    fi
+
+
+    # ========================================================
+    # SAM -> SORTED BAM
+    # ========================================================
+
+    echo "Sorting BAM..."
+
+    samtools sort \
+        -@ "$SLURM_CPUS_PER_TASK" \
+        -o "$bam_file" \
+        "$sam_file"
+
+
+    # ========================================================
+    # INDEX BAM
+    # ========================================================
+
+    samtools index "$bam_file"
+
+
+    # ========================================================
+    # BAM STATISTICS
+    # ========================================================
+
+    samtools flagstat "$bam_file" > "$flagstat_org"
+
+    samtools idxstat "$bam_file" > "$idxstat_org"
+
+    samtools coverage "$bam_file" > "$coverage_org"
+
+
+    # ========================================================
+    # FILTER BAM: REMOVE READS WITH MAPQ < 20
+    # ========================================================
+
+    echo "Filtering BAM (MAPQ >= 20)..."
+
+    samtools view \
+        -@ "$SLURM_CPUS_PER_TASK" \
+        -b \
+        -q 20 \
+        "$bam_file" \
+        -o "$bam_filtered_file"
+
+
+    # ========================================================
+    # INDEX FILTERED BAM
+    # ========================================================
+
+    samtools index "$bam_filtered_file"
+
+
+    # ========================================================
+    # FILTERED BAM STATISTICS
+    # ========================================================
+
+    samtools flagstat "$bam_filtered_file" > "$flagstat_filt"
+
+    samtools idxstat "$bam_filtered_file" > "$idxstat_filt"
+
+    samtools coverage "$bam_filtered_file" > "$coverage_filt"
+
+
+    # ========================================================
+    # CLEANUP
+    # ========================================================
+
+    rm "$sam_file"
+
+    echo "Finished: $sample"
+    echo
+
+done
+
+echo "All samples processed."
