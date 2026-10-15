@@ -1,0 +1,17 @@
+#!/bin/bash
+#SBATCH --job-name=run_Logfold_Ratio.job
+#SBATCH --nodes=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=8G
+#SBATCH --time=01:00:00
+#SBATCH --output=logs/%x_%j.out
+#SBATCH --error=logs/%x_%j.err
+
+cd $SLURM_SUBMIT_DIR
+
+mkdir -p logs
+
+module purge
+module load R/4.6.1-gfbf-2026.1
+
+Rscript /scratch/gent/vo/002/gvo00207/vsc52059/Master_thesis_scripts/Logfold_Ratio.R

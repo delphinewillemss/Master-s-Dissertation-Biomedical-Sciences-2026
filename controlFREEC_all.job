@@ -1,0 +1,85 @@
+#!/bin/bash
+#SBATCH --job-name=controlFREEC_all.job
+#SBATCH --nodes=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=16G
+#SBATCH --time=24:00:00
+#SBATCH --array=0-85
+#SBATCH --output=logs/%x_%A_%a.out
+#SBATCH --error=logs/%x_%A_%a.err
+
+cd $SLURM_SUBMIT_DIR
+
+mkdir -p logs
+
+module purge
+module load GCCcore/13.3.0
+module load SAMtools/1.21-GCC-13.3.0
+
+FREEC="/scratch/gent/vo/002/gvo00207/vsc52059/FREEC-11.6b/src/freec"
+
+CHRLEN="/scratch/gent/vo/002/gvo00207/vsc52059/mm10_ref/mm10.fa.fai"
+CHRFILES="/scratch/gent/vo/002/gvo00207/vsc52059/mm10_ref/chrFiles"
+
+OUT_BASE="/scratch/gent/vo/002/gvo00207/vsc52059/FREEC_all"
+
+mkdir -p "${OUT_BASE}"
+
+BAM_LIST="/scratch/gent/vo/002/gvo00207/vsc52059/all_bams_sorted.txt"
+
+bam=$(sed -n "$((SLURM_ARRAY_TASK_ID+1))p" "${BAM_LIST}")
+
+if [ -z "$bam" ]; then
+    echo "No BAM found for task ${SLURM_ARRAY_TASK_ID}"
+    exit 1
+fi
+
+filename=$(basename "$bam")
+
+sample=${filename%.sorted.bam}
+sample=${sample%_sorted.bam}
+
+echo "Sample: ${sample}"
+echo "BAM: ${bam}"
+
+SAMPLE_OUT="${OUT_BASE}/${sample}"
+
+mkdir -p "${SAMPLE_OUT}"
+
+# Skip samples that already have FREEC output
+if ls "${SAMPLE_OUT}"/*_ratio.txt >/dev/null 2>&1; then
+    echo "${sample} already processed. Skipping."
+    exit 0
+fi
+
+CONFIG="${SAMPLE_OUT}/${sample}.conf"
+
+cat > "${CONFIG}" << EOF
+[general]
+
+chrLenFile=${CHRLEN}
+
+ploidy=2
+
+window=1000000
+
+chrFiles=${CHRFILES}
+
+outputDir=${SAMPLE_OUT}
+
+breakPointThreshold=0.8
+
+[sample]
+
+mateFile=${bam}
+
+inputFormat=BAM
+
+mateOrientation=0
+EOF
+
+echo "Running FREEC for ${sample}"
+
+${FREEC} -conf "${CONFIG}"
+
+echo "Finished ${sample}" 
